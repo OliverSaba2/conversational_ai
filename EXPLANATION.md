@@ -3,8 +3,8 @@
 ## Short explanation
 
 This is a chat assistant for a clinic. A patient can book, reschedule, or cancel an
-appointment, ask about doctors, availability, or opening hours - typing however they'd
-actually type, typos and all - and the assistant collects whatever's missing over as
+appointment, ask about doctors, availability, or opening hours (typing however they'd
+actually type, typos and all) and the assistant collects whatever's missing over as
 many messages as it takes, then double-checks with the patient before it actually does
 anything.
 
@@ -12,15 +12,10 @@ anything.
 
 The pipeline is: clean up the message → figure out the intent → pull out whatever
 details are in it → hand both to a conversation state machine that decides what to do
-next. That state machine (`session.py`) is really the heart of the project - it's what
+next. That state machine (`session.py`) is the heart of the project, it's what
 lets a patient say "book an appointment" in one message, "with Dr. George" in the next,
 and "tomorrow at 4" in the one after that, and have it all add up to one request instead
 of three separate half-finished ones.
-
-I kept the NLU side (`normalize.py`, `intents.py`, `extraction.py`) deliberately simple -
-keyword and regex based, no ML - because the goal was a correct, predictable, explainable
-pipeline first. It's built so a real NLU model or an LLM call could slot in later without
-touching the conversation logic around it.
 
 ## How I identify intent
 
@@ -32,8 +27,8 @@ specific phrases are checked first so they don't get swallowed by a generic one.
 Before any of that runs, `normalize.py` spell-corrects the message against a small
 vocabulary of clinic words using `difflib` ("tommorow" → "tomorrow", "cancle" →
 "cancel"), so a typo doesn't just fail to match anything. A message with no obvious
-keyword at all - someone who just says "Dr. George tomorrow at 4pm" without ever saying
-"book" - is still recognized as a booking if it has booking-shaped details in it.
+keyword at all (someone who just says "Dr. George tomorrow at 4pm" without ever saying
+"book") is still recognized as a booking if it has booking-shaped details in it.
 
 ## How I extract information
 
@@ -41,7 +36,7 @@ keyword at all - someone who just says "Dr. George tomorrow at 4pm" without ever
 relative dates ("tomorrow", "next Friday"), explicit calendar dates in several formats,
 and a "from Monday to Wednesday" pattern for reschedules. Doctor names are checked
 against a fixed roster of five doctors, with typo tolerance, and don't require the word
-"Dr." - just saying "George" is enough once we're already in a booking conversation.
+"Dr.": just saying "George" is enough once we're already in a booking conversation.
 
 None of this depends on the sentence being in a fixed order. A patient can give the
 doctor, then the date, then the time, in any order, across any number of messages, and
@@ -52,11 +47,11 @@ it all gets merged into the same request.
 The assistant tracks exactly what it still needs (doctor, date, time, patient identity)
 and asks for only that, nothing more. If several pieces are missing it asks for all of
 them at once rather than one at a time. If the patient gives things in the "wrong"
-order - their name when asked for a card number, a card number when asked for a name -
-that's accepted instead of rejected, because that's genuinely how people answer.
+order such as their name when asked for a card number or a card number when asked for a name,
+that's accepted instead of rejected, because that can be how people answer.
 
-The specific ambiguous case called out in the brief - "I might want to see Dr. George
-tomorrow at 4, but don't book anything yet" - is handled by detecting phrases like
+The specific ambiguous case called out in the brief: "I might want to see Dr. George
+tomorrow at 4, but don't book anything yet" is handled by detecting phrases like
 "don't book"/"don't confirm" and routing straight to a plain availability check instead
 of creating anything, even though all the booking details are technically present.
 
@@ -98,13 +93,11 @@ and something you'd trust with a real clinic:
 - Replace the JSON files with a real database. Right now two people booking at the exact
   same moment could race each other; a database with proper transactions fixes that, and
   it's also just the right long-term storage for real patient data.
-- Real calendar/EHR integration instead of a flat "one hour per slot" assumption -
+- Real calendar/EHR integration instead of a flat "one hour per slot" assumption,
   different visit types need different durations, and a real system needs to talk to
   whatever the clinic's staff are actually using.
 - Proper authentication on the admin board (hashed passwords, real sessions, maybe
   per-staff accounts) instead of the single shared username/password it has now, which I
   built as a placeholder, not something to expose beyond a local machine.
-- Logging, monitoring, and automated tests around the conversation logic before trusting
-  it with real patients - right now correctness has been checked by hand, run by run.
 - Timezones. A single clinic in one timezone was a reasonable assumption for this
   exercise, but a production version can't assume everyone's on the same clock.
