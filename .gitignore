@@ -1,0 +1,14 @@
+# Secrets / local config
+.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+
+# Local mocked "database" files, created at runtime
+patients.json
+appointments.json
+
+# Streamlit local cache/config
+.streamlit/

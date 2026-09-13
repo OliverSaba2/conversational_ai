@@ -1,9 +1,11 @@
 """
-Step 3: mocked clinic actions, and the logic that decides which one to call.
-
-The mocked actions just print what they would do and return a dict describing
-the call - stand-ins for real calendar/EHR integrations.
+Step 3: mocked clinic actions. Each prints what it would do and returns a
+dict describing the call - a stand-in for a real calendar/EHR integration.
+session.py decides which one to call; appointment_store.py backs these.
 """
+
+import appointment_store
+from config import CLINIC_DOCTORS
 
 
 def check_availability(doctor=None, date=None, time=None):
@@ -11,19 +13,61 @@ def check_availability(doctor=None, date=None, time=None):
     return {"action": "check_availability", "doctor": doctor, "date": date, "time": time}
 
 
-def create_appointment(doctor=None, date=None, time=None):
-    print(f"[MOCK] create_appointment(doctor={doctor}, date={date}, time={time})")
-    return {"action": "create_appointment", "doctor": doctor, "date": date, "time": time}
+def list_doctors():
+    print(f"[MOCK] list_doctors() -> {CLINIC_DOCTORS}")
+    return {"action": "list_doctors", "doctors": CLINIC_DOCTORS}
 
 
-def reschedule_appointment(doctor=None, new_date=None, time=None):
-    print(f"[MOCK] reschedule_appointment(doctor={doctor}, new_date={new_date}, time={time})")
-    return {"action": "reschedule_appointment", "doctor": doctor, "new_date": new_date, "time": time}
+def create_appointment(patient_name=None, patient_card=None, doctor=None, date=None, time=None):
+    # No exclude_card (unlike reschedule) - a new booking can't collide with
+    # ANY existing appointment for that doctor/time, even this patient's own.
+    conflict = appointment_store.find_conflict(doctor, date, time)
+    if conflict:
+        print(f"[MOCK] create_appointment CONFLICT: {doctor} already booked on {date} at {time}")
+        return {"action": "slot_unavailable", "doctor": doctor, "date": date, "time": time}
+
+    print(f"[MOCK] create_appointment(patient={patient_name}, doctor={doctor}, date={date}, time={time})")
+    appointment_store.add_appointment(patient_card, patient_name, doctor, date, time)
+    return {
+        "action": "create_appointment",
+        "patient_name": patient_name,
+        "patient_card": patient_card,
+        "doctor": doctor,
+        "date": date,
+        "time": time,
+    }
 
 
-def cancel_appointment(doctor=None, date=None):
-    print(f"[MOCK] cancel_appointment(doctor={doctor}, date={date})")
-    return {"action": "cancel_appointment", "doctor": doctor, "date": date}
+def reschedule_appointment(patient_name=None, patient_card=None, doctor=None, original_date=None, new_date=None, time=None):
+    conflict = appointment_store.find_conflict(doctor, new_date, time, exclude_card=patient_card)
+    if conflict:
+        print(f"[MOCK] reschedule_appointment CONFLICT: {doctor} already booked on {new_date} at {time}")
+        return {"action": "slot_unavailable", "doctor": doctor, "date": new_date, "time": time}
+
+    print(
+        f"[MOCK] reschedule_appointment(patient={patient_name}, doctor={doctor}, "
+        f"original_date={original_date}, new_date={new_date}, time={time})"
+    )
+    appointment_store.update_appointment(patient_card, doctor, new_date, time)
+    return {
+        "action": "reschedule_appointment",
+        "patient_name": patient_name,
+        "patient_card": patient_card,
+        "doctor": doctor,
+        "original_date": original_date,
+        "new_date": new_date,
+        "time": time,
+    }
+
+
+def cancel_appointment(patient_name=None, patient_card=None, doctor=None, date=None):
+    removed = appointment_store.remove_appointment(patient_card, doctor, date)
+    if not removed:
+        print(f"[MOCK] cancel_appointment: nothing on file for patient_card={patient_card}")
+        return {"action": "no_appointment_found", "patient_name": patient_name}
+
+    print(f"[MOCK] cancel_appointment(patient={patient_name}, doctor={doctor}, date={date})")
+    return {"action": "cancel_appointment", "patient_name": patient_name, "patient_card": patient_card, "doctor": doctor, "date": date}
 
 
 def handoff_to_human(reason=None):
@@ -36,46 +80,19 @@ def ask_for_more_information(missing_fields=None):
     return {"action": "ask_for_more_information", "missing_fields": missing_fields or []}
 
 
-def decide_action(intent: str, entities: dict) -> dict:
-    """
-    Pick the right mocked action for the given intent + extracted entities.
+def await_confirmation(intent=None, doctor=None, date=None, time=None):
+    """No side effect - we have everything we need, but the patient hasn't said yes yet."""
+    print(f"[MOCK] await_confirmation(intent={intent}, doctor={doctor}, date={date}, time={time})")
+    return {"action": "await_confirmation", "intent": intent, "doctor": doctor, "date": date, "time": time}
 
-    Key rule (the "ambiguous case" from the brief): if the patient explicitly
-    said not to book/confirm yet, we must never call create_appointment -
-    we just check availability instead.
-    """
-    doctor = entities.get("doctor")
-    date = entities.get("preferred_date")
-    time = entities.get("preferred_time")
-    no_confirm = entities.get("explicit_no_confirm")
 
-    if intent == "request_human":
-        return handoff_to_human(reason="patient asked to speak with a human")
+def no_appointment(intent=None, reason=None):
+    """No side effect - the patient declined, or backed out mid-conversation."""
+    print(f"[MOCK] no_appointment(intent={intent}, reason={reason})")
+    return {"action": "no_appointment", "intent": intent, "reason": reason}
 
-    if intent == "ask_opening_hours":
-        return {"action": "answer_opening_hours"}
 
-    if intent == "ask_doctor_availability":
-        return check_availability(doctor=doctor, date=date, time=time)
-
-    if intent == "cancel_appointment":
-        if not doctor and not date:
-            return ask_for_more_information(missing_fields=["doctor_or_date"])
-        return cancel_appointment(doctor=doctor, date=date)
-
-    if intent == "reschedule_appointment":
-        if not date:
-            return ask_for_more_information(missing_fields=["new_date"])
-        return reschedule_appointment(doctor=doctor, new_date=date, time=time)
-
-    if intent == "book_appointment":
-        if no_confirm:
-            # Patient is thinking out loud, not confirming a booking.
-            return check_availability(doctor=doctor, date=date, time=time)
-        missing = [name for name, value in [("date", date), ("time", time)] if not value]
-        if missing:
-            return ask_for_more_information(missing_fields=missing)
-        return create_appointment(doctor=doctor, date=date, time=time)
-
-    # intent == "unclear"
-    return ask_for_more_information(missing_fields=["intent"])
+def no_appointment_found(patient_card=None, patient_name=None):
+    """No side effect - the patient has nothing on file to reschedule/cancel."""
+    print(f"[MOCK] no_appointment_found(patient_card={patient_card})")
+    return {"action": "no_appointment_found", "patient_card": patient_card, "patient_name": patient_name}
